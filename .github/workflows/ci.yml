@@ -6,40 +6,18 @@ on:
   workflow_dispatch:
 
 jobs:
-  ruff-check:
+  qa:
     runs-on: nested
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [ruff, format, pyright, pytest]
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
-      - run: uvx ruff@latest check
-
-  ruff-format:
-    runs-on: nested
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
-      - run: uvx ruff@latest format --check
-
-  basedpyright:
-    runs-on: nested
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: wprhvso/qa-python@v1
         with:
-          enable-cache: true
-      - run: uv sync
-      - run: uvx basedpyright@latest
-
-  pytest:
-    runs-on: nested
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
-        with:
-          enable-cache: true
-      - run: uv sync
-      - run: uv run coverage run -m pytest
-      - run: uv run coverage report
+          checks: ${{ matrix.check }}
+          coverage-fail-under: "95"
 
   build:
     runs-on: nested
