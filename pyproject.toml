@@ -27,7 +27,6 @@ Issues = "https://github.com/wprhvso/aiogram-buffered-router/issues"
 
 [dependency-groups]
 dev = [
-    "coverage>=7.6",
     "hypothesis>=6.130",
     "pytest>=8.3",
     "pytest-asyncio>=1.0",
@@ -39,15 +38,3 @@ packages = ["src/aiogram_buffered_router"]
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "README.md", "LICENSE"]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
-
-[tool.coverage.run]
-branch = true
-source = ["aiogram_buffered_router"]
-
-[tool.coverage.report]
-show_missing = true
-skip_covered = true
-exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:"]
