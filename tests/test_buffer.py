@@ -186,3 +186,33 @@ async def test_flush_on_empty_buffer_is_a_noop() -> None:
         await buffer.flush()
 
     assert collector.batches == []
+
+
+async def test_is_buffering_reports_an_open_batch_for_its_own_key() -> None:
+    collector = Collector()
+    buffer = MessageBuffer(handler=collector, interval=IDLE, key=chat_key)
+
+    async with asyncio.timeout(DEADLINE):
+        assert not buffer.is_buffering(make_message(chat_id=1))
+
+        await buffer.add(make_message(chat_id=1, text="a"), {})
+
+        assert buffer.is_buffering(make_message(chat_id=1, message_id=2))
+        assert not buffer.is_buffering(make_message(chat_id=2, message_id=3))
+
+        await buffer.flush()
+
+        assert not buffer.is_buffering(make_message(chat_id=1, message_id=4))
+
+
+async def test_is_buffering_follows_the_key_builder() -> None:
+    collector = Collector()
+    buffer = MessageBuffer(handler=collector, interval=IDLE)
+
+    async with asyncio.timeout(DEADLINE):
+        await buffer.add(make_message(chat_id=1, text="a", thread_id=7), {})
+
+        assert buffer.is_buffering(make_message(chat_id=1, message_id=2, thread_id=7))
+        assert not buffer.is_buffering(make_message(chat_id=1, message_id=3))
+
+        await buffer.flush()
