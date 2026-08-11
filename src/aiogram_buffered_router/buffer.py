@@ -50,6 +50,10 @@ class MessageBuffer:
     def pending(self) -> int:
         return sum(len(batch.messages) for batch in self._batches.values())
 
+    def is_buffering(self, message: Message) -> bool:
+        batch = self._batches.get(self._key(message))
+        return batch is not None and bool(batch.messages)
+
     async def add(self, message: Message, data: dict[str, Any]) -> None:
         if self._closed:
             raise BufferClosedError
