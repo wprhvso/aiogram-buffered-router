@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import logging
 from collections.abc import Awaitable, Callable, Coroutine, Hashable
 from dataclasses import dataclass, field
@@ -12,6 +13,9 @@ logger: Final = logging.getLogger(__name__)
 
 BatchHandler = Callable[[list[Message], dict[str, Any]], Awaitable[None]]
 KeyBuilder = Callable[[Message], Hashable]
+ErrorHandler = Callable[[BaseException, list[Message], dict[str, Any]], None]
+
+CONTEXTS_KEY: Final = "buffered_contexts"
 
 
 class BufferClosedError(RuntimeError):
@@ -22,6 +26,9 @@ class BufferClosedError(RuntimeError):
 @dataclass(slots=True)
 class _Batch:
     messages: list[Message] = field(default_factory=list)
+    contexts: list[contextvars.Context] = field(
+        default_factory=list[contextvars.Context]
+    )
     data: dict[str, Any] = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     ready: asyncio.Event = field(default_factory=asyncio.Event)
@@ -37,11 +44,15 @@ class MessageBuffer:
         interval: float = 1.0,
         max_size: int = 0,
         key: KeyBuilder = thread_key,
+        on_error: ErrorHandler | None = None,
+        expose_contexts: bool = False,
     ) -> None:
         self._handler: Final = handler
         self._interval: Final = interval
         self._max_size: Final = max_size
         self._key: Final = key
+        self._on_error: Final = on_error
+        self._expose_contexts: Final = expose_contexts
         self._batches: dict[Hashable, _Batch] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self._closed = False
@@ -66,6 +77,10 @@ class MessageBuffer:
 
         async with batch.lock:
             batch.messages.append(message)
+            # Snapshot per message, not per batch: the batch task outlives the
+            # update that created it, so anything read from the task's own
+            # context belongs to whichever update happened to open the batch.
+            batch.contexts.append(contextvars.copy_context())
             batch.data = data
             if batch.task is None:
                 batch.task = self._spawn(self._run(key, batch))
@@ -91,8 +106,17 @@ class MessageBuffer:
     def _is_full(self, batch: _Batch) -> bool:
         return 0 < self._max_size <= len(batch.messages)
 
-    def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
-        task = asyncio.get_running_loop().create_task(coro)
+    def _spawn(
+        self,
+        coro: Coroutine[Any, Any, None],
+        context: contextvars.Context | None = None,
+    ) -> asyncio.Task[None]:
+        # A batch loop is infrastructure that spans many updates, so it starts
+        # from an empty context instead of inheriting the one update that
+        # happened to open the batch.
+        task = asyncio.get_running_loop().create_task(
+            coro, context=contextvars.Context() if context is None else context
+        )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
@@ -113,11 +137,15 @@ class MessageBuffer:
 
     def _take(
         self, key: Hashable, batch: _Batch
-    ) -> tuple[list[Message], dict[str, Any]]:
+    ) -> tuple[list[Message], list[contextvars.Context], dict[str, Any]]:
         limit = self._max_size if self._max_size > 0 else len(batch.messages)
         messages = batch.messages[:limit]
         del batch.messages[:limit]
+        contexts = batch.contexts[:limit]
+        del batch.contexts[:limit]
         data = dict(batch.data)
+        if self._expose_contexts:
+            data[CONTEXTS_KEY] = tuple(contexts)
 
         if not batch.messages:
             batch.ready.clear()
@@ -128,22 +156,64 @@ class MessageBuffer:
         elif not (batch.drain or self._is_full(batch)):
             batch.ready.clear()
 
-        return messages, data
+        return messages, contexts, data
+
+    async def _invoke(self, messages: list[Message], data: dict[str, Any]) -> None:
+        await self._handler(messages, data)
+
+    async def _dispatch(
+        self,
+        key: Hashable,
+        messages: list[Message],
+        contexts: list[contextvars.Context],
+        data: dict[str, Any],
+    ) -> None:
+        # Run the batch in the context of the update that opened it, so work
+        # deferred by the debounce still belongs to the request that caused it.
+        origin = contexts[0] if contexts else None
+        task = self._spawn(self._invoke(messages, data), origin)
+        try:
+            await task
+        except asyncio.CancelledError:
+            _ = task.cancel()
+            raise
+        except Exception as error:
+            if origin is None:
+                self._report(error, messages, data, key)
+            else:
+                # Report from the originating context too: a caller that maps
+                # the failure back onto the update — onto its span, its trace —
+                # can only do that from where the update was.
+                origin.run(self._report, error, messages, data, key)
 
     async def _run(self, key: Hashable, batch: _Batch) -> None:
         while True:
             await self._wait(batch)
 
             async with batch.lock:
-                messages, data = self._take(key, batch)
+                messages, contexts, data = self._take(key, batch)
                 if not messages:
                     return
 
-            try:
-                await self._handler(messages, data)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception(
-                    "buffered_batch_handler_failed", extra={"batch_key": key}
-                )
+            await self._dispatch(key, messages, contexts, data)
+
+    def _report(
+        self,
+        error: BaseException,
+        messages: list[Message],
+        data: dict[str, Any],
+        key: Hashable,
+    ) -> None:
+        logger.error(
+            "buffered_batch_handler_failed",
+            exc_info=error,
+            extra={"batch_key": key},
+        )
+        if self._on_error is None:
+            return
+        # The batch runs detached from the dispatcher, so aiogram's error
+        # handling can never see this failure; the hook is the only way out.
+        try:
+            self._on_error(error, messages, data)
+        except Exception:
+            logger.exception("buffered_error_handler_failed", extra={"batch_key": key})
