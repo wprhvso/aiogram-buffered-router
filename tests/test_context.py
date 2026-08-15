@@ -20,7 +20,7 @@ class Recorder:
         self.data: list[dict[str, Any]] = []
         self.called = asyncio.Event()
 
-    async def __call__(self, messages: list[Message], data: dict[str, Any]) -> None:
+    async def __call__(self, _messages: list[Message], data: dict[str, Any]) -> None:
         self.seen.append(origin.get())
         self.data.append(data)
         self.called.set()
