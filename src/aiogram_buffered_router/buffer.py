@@ -158,6 +158,9 @@ class MessageBuffer:
 
         return messages, contexts, data
 
+    async def _invoke(self, messages: list[Message], data: dict[str, Any]) -> None:
+        await self._handler(messages, data)
+
     async def _dispatch(
         self,
         key: Hashable,
@@ -168,7 +171,7 @@ class MessageBuffer:
         # Run the batch in the context of the update that opened it, so work
         # deferred by the debounce still belongs to the request that caused it.
         origin = contexts[0] if contexts else None
-        task = self._spawn(self._handler(messages, data), origin)
+        task = self._spawn(self._invoke(messages, data), origin)
         try:
             await task
         except asyncio.CancelledError:
@@ -201,7 +204,7 @@ class MessageBuffer:
         data: dict[str, Any],
         key: Hashable,
     ) -> None:
-        logger.exception(
+        logger.error(
             "buffered_batch_handler_failed",
             exc_info=error,
             extra={"batch_key": key},
