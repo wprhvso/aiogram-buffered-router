@@ -7,10 +7,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # uv publish is the one step in this repository that cannot be taken back:
-  # PyPI will not accept a version again once it has been uploaded, deleted or
-  # not. Nothing goes out before the same checks that guard a commit have
-  # passed on the commit being released.
   check:
     runs-on: nested
     strategy:
@@ -24,10 +20,6 @@ jobs:
           checks: ${{ matrix.check }}
           coverage-fail-under: "95"
 
-  # Every push to main lands here, and almost none of them are releases. PyPI
-  # is the record of what has already shipped: a push only releases when the
-  # version pyproject.toml declares is strictly higher than everything PyPI
-  # holds, which makes a release exactly a merged version bump.
   version:
     runs-on: nested
     outputs:
@@ -41,9 +33,6 @@ jobs:
           set -euo pipefail
           declared=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
           echo "version=$declared" >> "$GITHUB_OUTPUT"
-          # A 404 means the project has never been published, so anything is
-          # newer. Ordering is PEP 440's, not the shell's: 0.2.10 is above
-          # 0.2.9 and 1.0.0rc1 is below 1.0.0.
           curl -fsS https://pypi.org/pypi/aiogram-buffered-router/json -o pypi.json || echo '{}' > pypi.json
           release=$(uv run --no-project --with packaging python - "$declared" <<'PY'
           import json, sys
@@ -80,8 +69,6 @@ jobs:
       - run: uv build
       - run: uv publish --trusted-publishing always
 
-  # The tag is a record of what shipped, so it is written once the upload that
-  # cannot be taken back has succeeded.
   tag:
     runs-on: nested
     needs: [version, pypi]
