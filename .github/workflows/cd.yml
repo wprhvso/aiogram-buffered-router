@@ -2,19 +2,98 @@ name: cd
 
 on:
   push:
-    tags:
-      - v*
-
-permissions:
-  contents: read
-  id-token: write
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
-  publish:
+  # uv publish is the one step in this repository that cannot be taken back:
+  # PyPI will not accept a version again once it has been uploaded, deleted or
+  # not. Nothing goes out before the same checks that guard a commit have
+  # passed on the commit being released.
+  check:
     runs-on: nested
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [ruff, format, pyright, pytest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: wprhvso/qa-python@v1
+        with:
+          checks: ${{ matrix.check }}
+          coverage-fail-under: "95"
+
+  # Every push to main lands here, and almost none of them are releases. PyPI
+  # is the record of what has already shipped: a push only releases when the
+  # version pyproject.toml declares is strictly higher than everything PyPI
+  # holds, which makes a release exactly a merged version bump.
+  version:
+    runs-on: nested
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      release: ${{ steps.read.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
+      - id: read
+        run: |
+          set -euo pipefail
+          declared=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          echo "version=$declared" >> "$GITHUB_OUTPUT"
+          # A 404 means the project has never been published, so anything is
+          # newer. Ordering is PEP 440's, not the shell's: 0.2.10 is above
+          # 0.2.9 and 1.0.0rc1 is below 1.0.0.
+          curl -fsS https://pypi.org/pypi/aiogram-buffered-router/json -o pypi.json || echo '{}' > pypi.json
+          release=$(uv run --no-project --with packaging python - "$declared" <<'PY'
+          import json, sys
+          from packaging.version import InvalidVersion, Version
+
+          declared = Version(sys.argv[1])
+          published = []
+          for raw in json.load(open("pypi.json")).get("releases", {}):
+              try:
+                  published.append(Version(raw))
+              except InvalidVersion:
+                  pass
+          highest = max(published, default=None)
+          print("true" if highest is None or declared > highest else "false")
+          print(f"{declared} vs pypi {highest}", file=sys.stderr)
+          PY
+          )
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
+  pypi:
+    runs-on: nested
+    needs: [check, version]
+    if: needs.version.outputs.release == 'true'
+
     environment: pypi
+
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v9.0.0
       - run: uv build
       - run: uv publish --trusted-publishing always
+
+  # The tag is a record of what shipped, so it is written once the upload that
+  # cannot be taken back has succeeded.
+  tag:
+    runs-on: nested
+    needs: [version, pypi]
+    if: needs.version.outputs.release == 'true'
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          set -euo pipefail
+          tag="v${{ needs.version.outputs.version }}"
+          git tag "$tag" "$GITHUB_SHA"
+          git push origin "$tag"
