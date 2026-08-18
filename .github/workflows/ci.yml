@@ -7,7 +7,7 @@ on:
 
 jobs:
   qa:
-    runs-on: nested
+    runs-on: pool
     strategy:
       fail-fast: false
       matrix:
@@ -20,7 +20,7 @@ jobs:
           coverage-fail-under: "95"
 
   build:
-    runs-on: nested
+    runs-on: pool
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v9.0.0
