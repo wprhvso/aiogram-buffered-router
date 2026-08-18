@@ -23,5 +23,4 @@ jobs:
     runs-on: pool
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
       - run: uv build
