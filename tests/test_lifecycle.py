@@ -59,6 +59,20 @@ async def test_a_cancelled_flush_leaves_the_debounce_window_intact() -> None:
     assert handler.seen == ["a"]
 
 
+async def test_a_size_dispatch_leaves_the_remainder_buffered() -> None:
+    handler = Blocking(block="never")
+    buffer = MessageBuffer(handler=handler, interval=IDLE, max_size=2)
+
+    async with asyncio.timeout(DEADLINE):
+        for index, text in enumerate(("a", "b", "c"), start=1):
+            await buffer.add(make_message(message_id=index, text=text), {})
+        _ = await handler.entered.wait()
+        assert buffer.pending == 1
+        await buffer.flush()
+
+    assert handler.seen == ["a", "c"]
+
+
 async def test_close_without_flush_cancels_a_running_handler() -> None:
     handler = Blocking(block="slow")
     buffer = MessageBuffer(handler=handler, interval=SHORT)

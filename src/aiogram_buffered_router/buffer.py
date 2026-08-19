@@ -71,25 +71,21 @@ class MessageBuffer:
             raise BufferClosedError
 
         key = self._key(message)
-        while True:
-            batch = self._batches.get(key)
-            if batch is None:
-                batch = _Batch()
-                self._batches[key] = batch
+        batch = self._batches.get(key)
+        if batch is None:
+            batch = _Batch()
+            self._batches[key] = batch
 
-            async with batch.lock:
-                if self._batches.get(key) is not batch:
-                    continue
-                batch.messages.append(message)
-                batch.contexts.append(contextvars.copy_context())
-                batch.data = data
-                if batch.task is None or batch.task.done():
-                    batch.drain = False
-                    batch.ready.clear()
-                    batch.task = self._spawn(self._run(key, batch))
-                if self._is_full(batch):
-                    batch.ready.set()
-                return
+        async with batch.lock:
+            batch.messages.append(message)
+            batch.contexts.append(contextvars.copy_context())
+            batch.data = data
+            if batch.task is None or batch.task.done():
+                batch.drain = False
+                batch.ready.clear()
+                batch.task = self._spawn(self._run(key, batch))
+            if self._is_full(batch):
+                batch.ready.set()
 
     async def flush(self) -> None:
         for batch in list(self._batches.values()):
@@ -151,8 +147,7 @@ class MessageBuffer:
         if not batch.messages:
             batch.ready.clear()
             if not messages:
-                if self._batches.get(key) is batch:
-                    _ = self._batches.pop(key, None)
+                _ = self._batches.pop(key, None)
                 batch.task = None
         elif not (batch.drain or self._is_full(batch)):
             batch.ready.clear()
@@ -169,7 +164,7 @@ class MessageBuffer:
         contexts: list[contextvars.Context],
         data: dict[str, Any],
     ) -> None:
-        origin = contexts[0] if contexts else None
+        origin = contexts[0]
         task = self._spawn(self._invoke(messages, data), origin)
         try:
             await task
@@ -179,10 +174,7 @@ class MessageBuffer:
                 await task
             raise
         except Exception as error:
-            if origin is None:
-                self._report(error, messages, data, key)
-            else:
-                origin.run(self._report, error, messages, data, key)
+            origin.run(self._report, error, messages, data, key)
 
     async def _run(self, key: Hashable, batch: _Batch) -> None:
         while True:
