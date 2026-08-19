@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from typing import Any, Final
 
@@ -88,9 +89,9 @@ class BufferedRouter(Router):
         return buffer
 
     async def flush(self) -> None:
-        for buffer in self._buffers:
-            await buffer.flush()
+        _ = await asyncio.gather(*(buffer.flush() for buffer in self._buffers))
 
     async def aclose(self, *, flush: bool = True) -> None:
-        for buffer in self._buffers:
-            await buffer.aclose(flush=flush)
+        _ = await asyncio.gather(
+            *(buffer.aclose(flush=flush) for buffer in self._buffers)
+        )

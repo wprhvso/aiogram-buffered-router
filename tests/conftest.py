@@ -7,6 +7,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.types import Chat, Message
 
 TEST_TOKEN = "42:TEST"
+OTHER_TOKEN = "43:TEST"
 
 
 def make_message(
@@ -28,5 +29,12 @@ def make_message(
 @pytest.fixture
 async def bot() -> AsyncIterator[Bot]:
     instance = Bot(token=TEST_TOKEN, session=AiohttpSession())
+    yield instance
+    await instance.session.close()
+
+
+@pytest.fixture
+async def other_bot() -> AsyncIterator[Bot]:
+    instance = Bot(token=OTHER_TOKEN, session=AiohttpSession())
     yield instance
     await instance.session.close()

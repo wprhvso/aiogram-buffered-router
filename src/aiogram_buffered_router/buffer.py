@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import contextvars
 import logging
 from collections.abc import Awaitable, Callable, Coroutine, Hashable
@@ -70,19 +71,25 @@ class MessageBuffer:
             raise BufferClosedError
 
         key = self._key(message)
-        batch = self._batches.get(key)
-        if batch is None:
-            batch = _Batch()
-            self._batches[key] = batch
+        while True:
+            batch = self._batches.get(key)
+            if batch is None:
+                batch = _Batch()
+                self._batches[key] = batch
 
-        async with batch.lock:
-            batch.messages.append(message)
-            batch.contexts.append(contextvars.copy_context())
-            batch.data = data
-            if batch.task is None:
-                batch.task = self._spawn(self._run(key, batch))
-            if self._is_full(batch):
-                batch.ready.set()
+            async with batch.lock:
+                if self._batches.get(key) is not batch:
+                    continue
+                batch.messages.append(message)
+                batch.contexts.append(contextvars.copy_context())
+                batch.data = data
+                if batch.task is None or batch.task.done():
+                    batch.drain = False
+                    batch.ready.clear()
+                    batch.task = self._spawn(self._run(key, batch))
+                if self._is_full(batch):
+                    batch.ready.set()
+                return
 
     async def flush(self) -> None:
         for batch in list(self._batches.values()):
@@ -168,6 +175,8 @@ class MessageBuffer:
             await task
         except asyncio.CancelledError:
             _ = task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
             raise
         except Exception as error:
             if origin is None:
