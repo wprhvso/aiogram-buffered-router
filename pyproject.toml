@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aiogram-buffered-router"
-version = "0.3.0"
+version = "0.3.1"
 description = "Debounced message batching router for aiogram 3"
 readme = "README.md"
 license = "MIT"
