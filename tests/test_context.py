@@ -27,7 +27,6 @@ class Recorder:
 
 
 async def add_as(buffer: MessageBuffer, message: Message, tag: str) -> None:
-    """Add a message from a context tagged like the update that carried it."""
     token = origin.set(tag)
     try:
         await buffer.add(message, {})
@@ -48,8 +47,6 @@ async def test_batch_runs_in_the_context_of_the_update_that_opened_it() -> None:
 
 
 async def test_a_later_batch_does_not_inherit_the_earlier_one() -> None:
-    # The batch task outlives a single batch, so without a per-batch context
-    # every later turn in a busy chat would report under the first turn.
     recorder = Recorder()
     buffer = MessageBuffer(handler=recorder, interval=IDLE)
 
@@ -72,8 +69,6 @@ async def test_the_buffer_loop_itself_starts_from_a_clean_context() -> None:
             await buffer.add(make_message(text="a"), {})
         finally:
             origin.reset(token)
-        # The handler still sees the caller because the message carried it,
-        # but nothing leaks through the loop itself.
         await buffer.flush()
 
     assert recorder.seen == ["caller"]

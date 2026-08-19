@@ -77,9 +77,6 @@ class MessageBuffer:
 
         async with batch.lock:
             batch.messages.append(message)
-            # Snapshot per message, not per batch: the batch task outlives the
-            # update that created it, so anything read from the task's own
-            # context belongs to whichever update happened to open the batch.
             batch.contexts.append(contextvars.copy_context())
             batch.data = data
             if batch.task is None:
@@ -111,9 +108,6 @@ class MessageBuffer:
         coro: Coroutine[Any, Any, None],
         context: contextvars.Context | None = None,
     ) -> asyncio.Task[None]:
-        # A batch loop is infrastructure that spans many updates, so it starts
-        # from an empty context instead of inheriting the one update that
-        # happened to open the batch.
         task = asyncio.get_running_loop().create_task(
             coro, context=contextvars.Context() if context is None else context
         )
@@ -168,8 +162,6 @@ class MessageBuffer:
         contexts: list[contextvars.Context],
         data: dict[str, Any],
     ) -> None:
-        # Run the batch in the context of the update that opened it, so work
-        # deferred by the debounce still belongs to the request that caused it.
         origin = contexts[0] if contexts else None
         task = self._spawn(self._invoke(messages, data), origin)
         try:
@@ -181,9 +173,6 @@ class MessageBuffer:
             if origin is None:
                 self._report(error, messages, data, key)
             else:
-                # Report from the originating context too: a caller that maps
-                # the failure back onto the update — onto its span, its trace —
-                # can only do that from where the update was.
                 origin.run(self._report, error, messages, data, key)
 
     async def _run(self, key: Hashable, batch: _Batch) -> None:
@@ -211,8 +200,6 @@ class MessageBuffer:
         )
         if self._on_error is None:
             return
-        # The batch runs detached from the dispatcher, so aiogram's error
-        # handling can never see this failure; the hook is the only way out.
         try:
             self._on_error(error, messages, data)
         except Exception:
