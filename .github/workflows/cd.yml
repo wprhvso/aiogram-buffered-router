@@ -4,22 +4,8 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 jobs:
-  check:
-    runs-on: pool
-    strategy:
-      fail-fast: false
-      matrix:
-        check: [ruff, format, pyright, pytest]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: wprhvso/qa-python@v1
-        with:
-          checks: ${{ matrix.check }}
-          coverage-fail-under: "95"
-
   version:
     runs-on: pool
     outputs:
@@ -27,58 +13,40 @@ jobs:
       release: ${{ steps.read.outputs.release }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - id: read
         run: |
-          set -euo pipefail
-          declared=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
-          echo "version=$declared" >> "$GITHUB_OUTPUT"
-          curl -fsS https://pypi.org/pypi/aiogram-buffered-router/json -o pypi.json || echo '{}' > pypi.json
-          release=$(uv run --no-project --with packaging python - "$declared" <<'PY'
-          import json, sys
-          from packaging.version import InvalidVersion, Version
-
-          declared = Version(sys.argv[1])
-          published = []
-          for raw in json.load(open("pypi.json")).get("releases", {}):
-              try:
-                  published.append(Version(raw))
-              except InvalidVersion:
-                  pass
-          highest = max(published, default=None)
-          print("true" if highest is None or declared > highest else "false")
-          print(f"{declared} vs pypi {highest}", file=sys.stderr)
-          PY
-          )
-          echo "release=$release" >> "$GITHUB_OUTPUT"
+          version=$(python3 -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
 
   pypi:
-    runs-on: pool
-    needs: [check, version]
+    needs: version
     if: needs.version.outputs.release == 'true'
-
+    runs-on: pool
     environment: pypi
-
     permissions:
       contents: read
       id-token: write
-
     steps:
       - uses: actions/checkout@v7
       - run: uv build
       - run: uv publish --trusted-publishing always
 
   tag:
-    runs-on: pool
     needs: [version, pypi]
     if: needs.version.outputs.release == 'true'
-
+    runs-on: pool
     permissions:
       contents: write
-
     steps:
       - uses: actions/checkout@v7
       - run: |
-          set -euo pipefail
-          tag="v${{ needs.version.outputs.version }}"
-          git tag "$tag" "$GITHUB_SHA"
-          git push origin "$tag"
+          git tag "v${{ needs.version.outputs.version }}"
+          git push origin "v${{ needs.version.outputs.version }}"

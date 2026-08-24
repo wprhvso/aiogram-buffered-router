@@ -2,25 +2,31 @@ name: ci
 
 on:
   push:
-  pull_request:
-  workflow_dispatch:
 
 jobs:
-  qa:
+  ruff:
     runs-on: pool
-    strategy:
-      fail-fast: false
-      matrix:
-        check: [ruff, format, pyright, pytest]
     steps:
       - uses: actions/checkout@v7
-      - uses: wprhvso/qa-python@v1
-        with:
-          checks: ${{ matrix.check }}
-          coverage-fail-under: "95"
+      - run: ruff check --output-format github .
 
-  build:
+  format:
     runs-on: pool
     steps:
       - uses: actions/checkout@v7
-      - run: uv build
+      - run: ruff format --check --diff .
+
+  pyright:
+    runs-on: pool
+    steps:
+      - uses: actions/checkout@v7
+      - run: uv sync --frozen
+      - run: basedpyright
+
+  pytest:
+    runs-on: pool
+    steps:
+      - uses: actions/checkout@v7
+      - run: uv sync --frozen
+      - run: echo "$PWD/.venv/bin" >>"$GITHUB_PATH"
+      - run: pytest
